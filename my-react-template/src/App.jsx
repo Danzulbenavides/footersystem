@@ -13,13 +13,27 @@ function App() {
   const TARGET_WIDTH = 5955;
   const TARGET_HEIGHT = 3970;
 
+  // Smart Fetch: Tries cloud first, falls back to device storage if offline
   const fetchPresets = async () => {
     try {
       const response = await fetch("https://footersystem.onrender.com/presets");
       const data = await response.json();
-      setPresets(data);
+
+      if (Array.isArray(data)) {
+        setPresets(data);
+        localStorage.setItem("offline_presets", JSON.stringify(data));
+      } else {
+        throw new Error("Invalid server data");
+      }
     } catch (error) {
-      console.error("failed to fetch presets: ", error);
+      console.warn(
+        "Failed to reach server. Loading offline presets from device memory...",
+      );
+
+      const savedLocalPresets = localStorage.getItem("offline_presets");
+      if (savedLocalPresets) {
+        setPresets(JSON.parse(savedLocalPresets));
+      }
     }
   };
 
@@ -27,11 +41,20 @@ function App() {
     fetchPresets();
   }, []);
 
+  // Smart Save: Tries database first, saves to device storage if offline
   const handleSavePreset = async () => {
     if (!presetName) {
       alert("Please enter a preset name!");
       return;
     }
+
+    const localPresetObj = {
+      id: Date.now(),
+      preset_name: presetName,
+      aspect_ratio: `${TARGET_WIDTH}x${TARGET_HEIGHT}`,
+      watermark_position: "bottom-left",
+      watermark_scale: 100,
+    };
 
     try {
       const response = await fetch(
@@ -52,12 +75,28 @@ function App() {
       );
 
       if (response.ok) {
-        alert("Preset saved successfully!");
+        alert("Preset saved successfully to cloud database!");
         setPresetName("");
         fetchPresets();
+      } else {
+        throw new Error("Server rejected save");
       }
     } catch (error) {
-      console.error("Failed to save preset:", error);
+      console.warn(
+        "Could not save to cloud server. Saving locally to this device...",
+      );
+
+      const savedLocalPresets = localStorage.getItem("offline_presets");
+      const currentList = savedLocalPresets
+        ? JSON.parse(savedLocalPresets)
+        : [];
+      const updatedList = [...currentList, localPresetObj];
+
+      localStorage.setItem("offline_presets", JSON.stringify(updatedList));
+      setPresets(updatedList);
+
+      alert("Saved to device memory! (You are currently offline)");
+      setPresetName("");
     }
   };
 
@@ -87,9 +126,8 @@ function App() {
 
     try {
       const watermarkImg = await loadImage(watermarkFile);
-      const zip = new JSZip(); // <-- Create a new ZIP file
+      const zip = new JSZip();
 
-      // Loop through all images and add them to the ZIP
       for (const file of galleryFiles) {
         const baseImg = await loadImage(file);
 
@@ -121,19 +159,13 @@ function App() {
 
         ctx.drawImage(watermarkImg, x, y, wmWidth, wmHeight);
 
-        // Convert canvas to base64 data
         const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-        // Remove the "data:image/jpeg;base64," prefix so JSZip can read it
         const base64Data = dataUrl.split(",")[1];
 
-        // Add this specific image into the ZIP file
         zip.file(`watermarked_${file.name}`, base64Data, { base64: true });
       }
 
-      // Generate the final ZIP file
       const zipContent = await zip.generateAsync({ type: "blob" });
-
-      // Create a URL for the ZIP and download it
       const zipUrl = URL.createObjectURL(zipContent);
       triggerDownload(zipUrl, "watermarked_photos.zip");
 
@@ -152,7 +184,7 @@ function App() {
       <h1>Bulk Photo Watermarking System</h1>
       <hr />
 
-      {/* --- SECTION 1: DATABASE SETTINGS --- */}
+      {/* --- SECTION 1: SETTINGS --- */}
       <section
         style={{
           marginBottom: "2rem",
@@ -196,21 +228,21 @@ function App() {
               height: "40px",
             }}
           >
-            Save to Database
+            Save Preset
           </button>
         </div>
 
         {/* Display Fetched Presets */}
         <div>
-          <h3>Saved Presets (From PostgreSQL)</h3>
+          <h3>Available Presets</h3>
           <ul>
             {!Array.isArray(presets) || presets.length === 0 ? (
-              <p>No presets saved yet or server error.</p>
+              <p>No presets loaded. Create one above!</p>
             ) : (
               presets.map((p) => (
                 <li key={p.id}>
-                  <strong>{p.preset_name}</strong>: {p.watermark_position} (
-                  {p.aspect_ratio})
+                  <strong>{p.preset_name}</strong>:{" "}
+                  {p.watermark_position || "bottom-left"} ({p.aspect_ratio})
                 </li>
               ))
             )}
@@ -230,7 +262,7 @@ function App() {
             />
             {galleryFiles.length > 0 && (
               <p style={{ fontSize: "0.8rem", color: "green" }}>
-                App.jsx knows you uploaded {galleryFiles.length} photos.
+                Ready to process {galleryFiles.length} photos.
               </p>
             )}
           </div>
@@ -243,7 +275,7 @@ function App() {
             />
             {watermarkFile && (
               <p style={{ fontSize: "0.8rem", color: "green" }}>
-                App.jsx has the watermark: {watermarkFile.name}
+                Watermark loaded: {watermarkFile.name}
               </p>
             )}
           </div>
