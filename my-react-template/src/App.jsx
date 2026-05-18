@@ -17,41 +17,21 @@ function App() {
     try {
       const response = await fetch("https://footersystem.onrender.com/presets");
       const data = await response.json();
-
-      // If server responds with a valid array, use it and update our local backup
-      if (Array.isArray(data)) {
-        setPresets(data);
-        localStorage.setItem("offline_presets", JSON.stringify(data));
-      } else {
-        throw new Error("Invalid server data");
-      }
+      setPresets(data);
     } catch (error) {
-      console.warn(
-        "Failed to reach server. Loading offline presets from device memory...",
-      );
-
-      // Fallback: Read from the device's local memory
-      const savedLocalPresets = localStorage.getItem("offline_presets");
-      if (savedLocalPresets) {
-        setPresets(JSON.parse(savedLocalPresets));
-      }
+      console.error("failed to fetch presets: ", error);
     }
   };
+
+  useEffect(() => {
+    fetchPresets();
+  }, []);
 
   const handleSavePreset = async () => {
     if (!presetName) {
       alert("Please enter a preset name!");
       return;
     }
-
-    // Create a local preset object just in case we are offline
-    const localPresetObj = {
-      id: Date.now(), // temporary unique ID
-      preset_name: presetName,
-      aspect_ratio: `${TARGET_WIDTH}x${TARGET_HEIGHT}`,
-      watermark_position: "bottom-left",
-      watermark_scale: 100,
-    };
 
     try {
       const response = await fetch(
@@ -72,29 +52,95 @@ function App() {
       );
 
       if (response.ok) {
-        alert("Preset saved successfully to cloud database!");
+        alert("Preset saved successfully!");
         setPresetName("");
         fetchPresets();
-      } else {
-        throw new Error("Server rejected save");
       }
     } catch (error) {
-      console.warn(
-        "Could not save to cloud server. Saving locally to this device...",
-      );
+      console.error("Failed to save preset:", error);
+    }
+  };
 
-      // Fallback: Save directly inside the browser's local memory
-      const savedLocalPresets = localStorage.getItem("offline_presets");
-      const currentList = savedLocalPresets
-        ? JSON.parse(savedLocalPresets)
-        : [];
-      const updatedList = [...currentList, localPresetObj];
+  const loadImage = (file) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  };
 
-      localStorage.setItem("offline_presets", JSON.stringify(updatedList));
-      setPresets(updatedList); // Update layout immediately
+  const triggerDownload = (dataUrl, filename) => {
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = `watermarked_${filename}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
-      alert("Saved to device memory! (You are currently offline)");
-      setPresetName("");
+  const processImages = async () => {
+    if (!watermarkFile || galleryFiles.length === 0) {
+      alert("Please upload both gallery photos and a watermark image first!");
+      return;
+    }
+
+    try {
+      const watermarkImg = await loadImage(watermarkFile);
+      const zip = new JSZip(); // <-- Create a new ZIP file
+
+      // Loop through all images and add them to the ZIP
+      for (const file of galleryFiles) {
+        const baseImg = await loadImage(file);
+
+        const canvas = document.createElement("canvas");
+        canvas.width = TARGET_WIDTH;
+        canvas.height = TARGET_HEIGHT;
+        const ctx = canvas.getContext("2d");
+
+        const scale = Math.max(
+          TARGET_WIDTH / baseImg.width,
+          TARGET_HEIGHT / baseImg.height,
+        );
+
+        const scaledWidth = baseImg.width * scale;
+        const scaledHeight = baseImg.height * scale;
+
+        const offsetX = (TARGET_WIDTH - scaledWidth) / 2;
+        const offsetY = (TARGET_HEIGHT - scaledHeight) / 2;
+
+        ctx.drawImage(baseImg, offsetX, offsetY, scaledWidth, scaledHeight);
+
+        const scaleFactor = 0.08;
+        const wmWidth = canvas.width * scaleFactor;
+        const wmHeight = (watermarkImg.height / watermarkImg.width) * wmWidth;
+
+        const padding = canvas.width * 0.02;
+        const x = padding;
+        const y = canvas.height - wmHeight - padding;
+
+        ctx.drawImage(watermarkImg, x, y, wmWidth, wmHeight);
+
+        // Convert canvas to base64 data
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+        // Remove the "data:image/jpeg;base64," prefix so JSZip can read it
+        const base64Data = dataUrl.split(",")[1];
+
+        // Add this specific image into the ZIP file
+        zip.file(`watermarked_${file.name}`, base64Data, { base64: true });
+      }
+
+      // Generate the final ZIP file
+      const zipContent = await zip.generateAsync({ type: "blob" });
+
+      // Create a URL for the ZIP and download it
+      const zipUrl = URL.createObjectURL(zipContent);
+      triggerDownload(zipUrl, "watermarked_photos.zip");
+
+      alert("All images processed and zipped successfully!");
+    } catch (error) {
+      console.error("Error processing images:", error);
+      alert("Something went wrong while processing the images.");
     }
   };
 
