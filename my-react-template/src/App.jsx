@@ -200,13 +200,16 @@ function App() {
         <div>
           <h3>Saved Presets (From PostgreSQL)</h3>
           <ul>
-            {presets.length === 0 ? <p>No presets saved yet.</p> : null}
-            {presets.map((p) => (
-              <li key={p.id}>
-                <strong>{p.preset_name}</strong>: {p.watermark_position} (
-                {p.aspect_ratio})
-              </li>
-            ))}
+            {!Array.isArray(presets) || presets.length === 0 ? (
+              <p>No presets saved yet or server error.</p>
+            ) : (
+              presets.map((p) => (
+                <li key={p.id}>
+                  <strong>{p.preset_name}</strong>: {p.watermark_position} (
+                  {p.aspect_ratio})
+                </li>
+              ))
+            )}
           </ul>
         </div>
       </section>
