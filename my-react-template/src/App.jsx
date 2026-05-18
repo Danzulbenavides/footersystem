@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { FileUploader } from "./components";
+import JSZip from "jszip";
 import "./App.css";
 
 function App() {
@@ -86,54 +87,57 @@ function App() {
 
     try {
       const watermarkImg = await loadImage(watermarkFile);
+      const zip = new JSZip(); // <-- Create a new ZIP file
 
+      // Loop through all images and add them to the ZIP
       for (const file of galleryFiles) {
         const baseImg = await loadImage(file);
 
-        // Create an invisible canvas locked to specific dimensions
         const canvas = document.createElement("canvas");
         canvas.width = TARGET_WIDTH;
         canvas.height = TARGET_HEIGHT;
         const ctx = canvas.getContext("2d");
 
-        // --- NEW: COVER / CROP MATH ---
-        // 1. Find the scale factor needed to cover the canvas completely
         const scale = Math.max(
           TARGET_WIDTH / baseImg.width,
           TARGET_HEIGHT / baseImg.height,
         );
 
-        // 2. Calculate the new scaled dimensions
         const scaledWidth = baseImg.width * scale;
         const scaledHeight = baseImg.height * scale;
 
-        // 3. Calculate offsets to center the image before cropping
         const offsetX = (TARGET_WIDTH - scaledWidth) / 2;
         const offsetY = (TARGET_HEIGHT - scaledHeight) / 2;
 
-        // Draw the image using the offsets and scaled sizes to mimic "object-fit: cover"
         ctx.drawImage(baseImg, offsetX, offsetY, scaledWidth, scaledHeight);
-        // ------------------------------
 
-        // Calculate watermark size relative to the locked canvas width
         const scaleFactor = 0.08;
         const wmWidth = canvas.width * scaleFactor;
         const wmHeight = (watermarkImg.height / watermarkImg.width) * wmWidth;
 
-        // Lock positioning to BOTTOM-LEFT only
         const padding = canvas.width * 0.02;
         const x = padding;
         const y = canvas.height - wmHeight - padding;
 
-        // Stamp the watermark
         ctx.drawImage(watermarkImg, x, y, wmWidth, wmHeight);
 
-        // Convert the canvas back to an image and download it
+        // Convert canvas to base64 data
         const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-        triggerDownload(dataUrl, file.name);
+        // Remove the "data:image/jpeg;base64," prefix so JSZip can read it
+        const base64Data = dataUrl.split(",")[1];
+
+        // Add this specific image into the ZIP file
+        zip.file(`watermarked_${file.name}`, base64Data, { base64: true });
       }
 
-      alert("All images processed successfully!");
+      // Generate the final ZIP file
+      const zipContent = await zip.generateAsync({ type: "blob" });
+
+      // Create a URL for the ZIP and download it
+      const zipUrl = URL.createObjectURL(zipContent);
+      triggerDownload(zipUrl, "watermarked_photos.zip");
+
+      alert("All images processed and zipped successfully!");
     } catch (error) {
       console.error("Error processing images:", error);
       alert("Something went wrong while processing the images.");
