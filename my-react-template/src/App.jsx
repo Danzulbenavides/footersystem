@@ -14,7 +14,7 @@ function App() {
 
   const fetchPresets = async () => {
     try {
-      const response = await fetch("http://localhost:5000/presets");
+      const response = await fetch("https://footersystem.onrender.com/presets");
       const data = await response.json();
       setPresets(data);
     } catch (error) {
@@ -33,19 +33,22 @@ function App() {
     }
 
     try {
-      const response = await fetch("http://localhost:5000/presets", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await fetch(
+        "https://footersystem.onrender.com/presets",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            user_id: 1,
+            preset_name: presetName,
+            aspect_ratio: `${TARGET_WIDTH}x${TARGET_HEIGHT}`,
+            watermark_position: "bottom-left",
+            watermark_scale: 100,
+          }),
         },
-        body: JSON.stringify({
-          user_id: 1,
-          preset_name: presetName,
-          aspect_ratio: `${TARGET_WIDTH}x${TARGET_HEIGHT}`,
-          watermark_position: "bottom-left",
-          watermark_scale: 100,
-        }),
-      });
+      );
 
       if (response.ok) {
         alert("Preset saved successfully!");
