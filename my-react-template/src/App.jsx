@@ -3,15 +3,18 @@ import { FileUploader } from "./components";
 import JSZip from "jszip";
 import "./App.css";
 
+// Import your footer directly from the src/assets folder
+import lockedFooter from "./assets/footer-03.png";
+
 function App() {
   const [galleryFiles, setGalleryFiles] = useState([]);
-  const [watermarkFile, setWatermarkFile] = useState(null);
   const [presets, setPresets] = useState([]);
   const [presetName, setPresetName] = useState("");
 
-  // --- LOCKED IMAGE DIMENSIONS ---
+  // --- LOCKED ASSETS & DIMENSIONS ---
   const TARGET_WIDTH = 5955;
   const TARGET_HEIGHT = 3970;
+  const LOCKED_FOOTER_PATH = lockedFooter; // Uses the imported asset variable
 
   // Smart Fetch: Tries cloud first, falls back to device storage if offline
   const fetchPresets = async () => {
@@ -100,12 +103,17 @@ function App() {
     }
   };
 
-  const loadImage = (file) => {
+  const loadImage = (source) => {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = URL.createObjectURL(file);
+      img.onerror = (err) => reject(new Error("Failed to render image asset."));
+
+      if (source instanceof Blob || source instanceof File) {
+        img.src = URL.createObjectURL(source);
+      } else {
+        img.src = source; // Handles the imported Vite image string smoothly
+      }
     });
   };
 
@@ -119,13 +127,13 @@ function App() {
   };
 
   const processImages = async () => {
-    if (!watermarkFile || galleryFiles.length === 0) {
-      alert("Please upload both gallery photos and a watermark image first!");
+    if (galleryFiles.length === 0) {
+      alert("Please upload gallery photos first!");
       return;
     }
 
     try {
-      const watermarkImg = await loadImage(watermarkFile);
+      const watermarkImg = await loadImage(LOCKED_FOOTER_PATH);
       const zip = new JSZip();
 
       for (const file of galleryFiles) {
@@ -159,7 +167,9 @@ function App() {
 
         ctx.drawImage(watermarkImg, x, y, wmWidth, wmHeight);
 
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+        const dataUrl = canvas.toToDataURL
+          ? canvas.toDataURL("image/jpeg", 0.9)
+          : canvas.toDataURL("image/jpeg", 0.9);
         const base64Data = dataUrl.split(",")[1];
 
         zip.file(`watermarked_${file.name}`, base64Data, { base64: true });
@@ -172,7 +182,9 @@ function App() {
       alert("All images processed and zipped successfully!");
     } catch (error) {
       console.error("Error processing images:", error);
-      alert("Something went wrong while processing the images.");
+      alert(
+        "Something went wrong while processing. Check that footer-03.png exists in your assets folder.",
+      );
     }
   };
 
@@ -253,8 +265,8 @@ function App() {
       {/* --- SECTION 2: UPLOADS --- */}
       <section>
         <h2>2. Upload Assets</h2>
-        <div style={{ display: "flex", gap: "2rem" }}>
-          <div style={{ flex: 1 }}>
+        <div style={{ display: "block", width: "100%" }}>
+          <div style={{ width: "100%" }}>
             <h3>Gallery Photos (Bulk)</h3>
             <FileUploader
               allowMultiple={true}
@@ -262,20 +274,8 @@ function App() {
             />
             {galleryFiles.length > 0 && (
               <p style={{ fontSize: "0.8rem", color: "green" }}>
-                Ready to process {galleryFiles.length} photos.
-              </p>
-            )}
-          </div>
-
-          <div style={{ flex: 1 }}>
-            <h3>Watermark Image (Single)</h3>
-            <FileUploader
-              allowMultiple={false}
-              onFilesSelected={(files) => setWatermarkFile(files[0])}
-            />
-            {watermarkFile && (
-              <p style={{ fontSize: "0.8rem", color: "green" }}>
-                Watermark loaded: {watermarkFile.name}
+                Ready to process {galleryFiles.length} photos with system footer
+                template.
               </p>
             )}
           </div>
@@ -286,19 +286,15 @@ function App() {
       <section style={{ marginTop: "3rem", textAlign: "center" }}>
         <button
           onClick={processImages}
-          disabled={galleryFiles.length === 0 || !watermarkFile}
+          disabled={galleryFiles.length === 0}
           style={{
             padding: "1rem 2rem",
             fontSize: "1.2rem",
-            backgroundColor:
-              galleryFiles.length > 0 && watermarkFile ? "#28a745" : "#ccc",
+            backgroundColor: galleryFiles.length > 0 ? "#28a745" : "#ccc",
             color: "white",
             border: "none",
             borderRadius: "8px",
-            cursor:
-              galleryFiles.length > 0 && watermarkFile
-                ? "pointer"
-                : "not-allowed",
+            cursor: galleryFiles.length > 0 ? "pointer" : "not-allowed",
             fontWeight: "bold",
           }}
         >
