@@ -11,10 +11,40 @@ function App() {
   const [presets, setPresets] = useState([]);
   const [presetName, setPresetName] = useState("");
 
-  // --- LOCKED ASSETS & DIMENSIONS ---
+  // This will hold our offline-safe footer image source
+  const [footerSource, setFooterSource] = useState(null);
+
+  // --- LOCKED DIMENSIONS ---
   const TARGET_WIDTH = 5955;
   const TARGET_HEIGHT = 3970;
-  const LOCKED_FOOTER_PATH = lockedFooter; // Uses the imported asset variable
+
+  // Cache the system footer into device memory for offline use
+  useEffect(() => {
+    const cacheFooterImage = async () => {
+      try {
+        const response = await fetch(lockedFooter);
+        const blob = (await response.json)
+          ? await response.blob()
+          : await response.blob();
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64Data = reader.result;
+          localStorage.setItem("offline_system_footer", base64Data);
+          setFooterSource(base64Data);
+        };
+        reader.readAsDataURL(blob);
+      } catch (error) {
+        console.warn("Offline: Fetching footer from local device cache...");
+        const savedFooter = localStorage.getItem("offline_system_footer");
+        if (savedFooter) {
+          setFooterSource(savedFooter);
+        }
+      }
+    };
+
+    cacheFooterImage();
+  }, []);
 
   // Smart Fetch: Tries cloud first, falls back to device storage if offline
   const fetchPresets = async () => {
@@ -112,7 +142,7 @@ function App() {
       if (source instanceof Blob || source instanceof File) {
         img.src = URL.createObjectURL(source);
       } else {
-        img.src = source; // Handles the imported Vite image string smoothly
+        img.src = source; // Safely reads our raw offline base64 string
       }
     });
   };
@@ -132,8 +162,16 @@ function App() {
       return;
     }
 
+    if (!footerSource) {
+      alert(
+        "System footer is still initializing. Please wait a brief moment or connect to the internet once to set up the cache.",
+      );
+      return;
+    }
+
     try {
-      const watermarkImg = await loadImage(LOCKED_FOOTER_PATH);
+      // Pulls the image directly out of pure hardware memory
+      const watermarkImg = await loadImage(footerSource);
       const zip = new JSZip();
 
       for (const file of galleryFiles) {
@@ -167,9 +205,7 @@ function App() {
 
         ctx.drawImage(watermarkImg, x, y, wmWidth, wmHeight);
 
-        const dataUrl = canvas.toToDataURL
-          ? canvas.toDataURL("image/jpeg", 0.9)
-          : canvas.toDataURL("image/jpeg", 0.9);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
         const base64Data = dataUrl.split(",")[1];
 
         zip.file(`watermarked_${file.name}`, base64Data, { base64: true });
@@ -183,7 +219,7 @@ function App() {
     } catch (error) {
       console.error("Error processing images:", error);
       alert(
-        "Something went wrong while processing. Check that footer-03.png exists in your assets folder.",
+        "Something went wrong while processing. Check console for details.",
       );
     }
   };
@@ -286,20 +322,25 @@ function App() {
       <section style={{ marginTop: "3rem", textAlign: "center" }}>
         <button
           onClick={processImages}
-          disabled={galleryFiles.length === 0}
+          disabled={galleryFiles.length === 0 || !footerSource}
           style={{
             padding: "1rem 2rem",
             fontSize: "1.2rem",
-            backgroundColor: galleryFiles.length > 0 ? "#28a745" : "#ccc",
+            backgroundColor:
+              galleryFiles.length > 0 && footerSource ? "#28a745" : "#ccc",
             color: "white",
             border: "none",
             borderRadius: "8px",
-            cursor: galleryFiles.length > 0 ? "pointer" : "not-allowed",
+            cursor:
+              galleryFiles.length > 0 && footerSource
+                ? "pointer"
+                : "not-allowed",
             fontWeight: "bold",
           }}
         >
-          Process & Download{" "}
-          {galleryFiles.length > 0 ? galleryFiles.length : ""} Photos
+          {!footerSource
+            ? "System Initializing..."
+            : `Process & Download ${galleryFiles.length > 0 ? galleryFiles.length : ""} Photos`}
         </button>
       </section>
     </div>
