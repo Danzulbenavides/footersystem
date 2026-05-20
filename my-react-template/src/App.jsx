@@ -11,7 +11,7 @@ function App() {
   const [presets, setPresets] = useState([]);
   const [presetName, setPresetName] = useState("");
 
-  // This will hold our offline-safe footer image source
+  // This holds our offline-safe footer image source
   const [footerSource, setFooterSource] = useState(null);
 
   // --- LOCKED DIMENSIONS ---
@@ -23,9 +23,7 @@ function App() {
     const cacheFooterImage = async () => {
       try {
         const response = await fetch(lockedFooter);
-        const blob = (await response.json)
-          ? await response.blob()
-          : await response.blob();
+        const blob = await response.blob();
 
         const reader = new FileReader();
         reader.onloadend = () => {
@@ -137,12 +135,12 @@ function App() {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = (err) => reject(new Error("Failed to render image asset."));
+      img.onerror = () => reject(new Error("Failed to render image asset."));
 
       if (source instanceof Blob || source instanceof File) {
         img.src = URL.createObjectURL(source);
       } else {
-        img.src = source; // Safely reads our raw offline base64 string
+        img.src = source;
       }
     });
   };
@@ -163,14 +161,11 @@ function App() {
     }
 
     if (!footerSource) {
-      alert(
-        "System footer is still initializing. Please wait a brief moment or connect to the internet once to set up the cache.",
-      );
+      alert("System footer is still initializing. Please wait a brief moment.");
       return;
     }
 
     try {
-      // Pulls the image directly out of pure hardware memory
       const watermarkImg = await loadImage(footerSource);
       const zip = new JSZip();
 
@@ -205,13 +200,21 @@ function App() {
 
         ctx.drawImage(watermarkImg, x, y, wmWidth, wmHeight);
 
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-        const base64Data = dataUrl.split(",")[1];
+        // SPEED OPTIMIZATION 1: Convert directly to a raw binary Blob instead of a heavy string
+        const blobData = await new Promise((resolve) => {
+          canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.9);
+        });
 
-        zip.file(`watermarked_${file.name}`, base64Data, { base64: true });
+        zip.file(`watermarked_${file.name}`, blobData);
       }
 
-      const zipContent = await zip.generateAsync({ type: "blob" });
+      // SPEED OPTIMIZATION 2: Use "STORE" (0 compression layout).
+      // This bypasses the zip compression algorithms completely because JPEGs are already compressed anyway!
+      const zipContent = await zip.generateAsync({
+        type: "blob",
+        compression: "STORE",
+      });
+
       const zipUrl = URL.createObjectURL(zipContent);
       triggerDownload(zipUrl, "watermarked_photos.zip");
 
