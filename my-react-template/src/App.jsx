@@ -169,13 +169,25 @@ function App() {
       const watermarkImg = await loadImage(footerSource);
       const zip = new JSZip();
 
-      for (const file of galleryFiles) {
+      // SPEED OPTIMIZATION 1: Create ONE canvas and reuse it
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+
+      // Pre-calculate watermark math to avoid repeating it in the loop
+      const scaleFactor = 0.08;
+      const wmWidth = TARGET_WIDTH * scaleFactor;
+      const wmHeight = (watermarkImg.height / watermarkImg.width) * wmWidth;
+      const padding = TARGET_WIDTH * 0.02;
+      const wmX = padding;
+      const wmY = TARGET_HEIGHT - wmHeight - padding;
+
+      for (let i = 0; i < galleryFiles.length; i++) {
+        const file = galleryFiles[i];
         const baseImg = await loadImage(file);
 
-        const canvas = document.createElement("canvas");
+        // Reset canvas dimensions for the current image
         canvas.width = TARGET_WIDTH;
         canvas.height = TARGET_HEIGHT;
-        const ctx = canvas.getContext("2d");
 
         const scale = Math.max(
           TARGET_WIDTH / baseImg.width,
@@ -184,32 +196,27 @@ function App() {
 
         const scaledWidth = baseImg.width * scale;
         const scaledHeight = baseImg.height * scale;
-
         const offsetX = (TARGET_WIDTH - scaledWidth) / 2;
         const offsetY = (TARGET_HEIGHT - scaledHeight) / 2;
 
         ctx.drawImage(baseImg, offsetX, offsetY, scaledWidth, scaledHeight);
+        ctx.drawImage(watermarkImg, wmX, wmY, wmWidth, wmHeight);
 
-        const scaleFactor = 0.08;
-        const wmWidth = canvas.width * scaleFactor;
-        const wmHeight = (watermarkImg.height / watermarkImg.width) * wmWidth;
-
-        const padding = canvas.width * 0.02;
-        const x = padding;
-        const y = canvas.height - wmHeight - padding;
-
-        ctx.drawImage(watermarkImg, x, y, wmWidth, wmHeight);
-
-        // SPEED OPTIMIZATION 1: Convert directly to a raw binary Blob instead of a heavy string
+        // SPEED OPTIMIZATION 2: Aggressively drop quality to 0.7 for faster processing
         const blobData = await new Promise((resolve) => {
-          canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.9);
+          canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.7);
         });
 
         zip.file(`watermarked_${file.name}`, blobData);
+
+        // SPEED OPTIMIZATION 3: "Breathe" - Let the browser rest for 10ms so it doesn't freeze
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        // Clear the canvas to prevent memory build-up
+        ctx.clearRect(0, 0, TARGET_WIDTH, TARGET_HEIGHT);
       }
 
-      // SPEED OPTIMIZATION 2: Use "STORE" (0 compression layout).
-      // This bypasses the zip compression algorithms completely because JPEGs are already compressed anyway!
+      // SPEED OPTIMIZATION 4: Use "STORE" (0 compression) because JPEGs are already compressed
       const zipContent = await zip.generateAsync({
         type: "blob",
         compression: "STORE",
@@ -217,6 +224,11 @@ function App() {
 
       const zipUrl = URL.createObjectURL(zipContent);
       triggerDownload(zipUrl, "watermarked_photos.zip");
+
+      // Clean up the heavy zip URL from memory
+      setTimeout(() => {
+        URL.revokeObjectURL(zipUrl);
+      }, 5000);
 
       alert("All images processed and zipped successfully!");
     } catch (error) {
