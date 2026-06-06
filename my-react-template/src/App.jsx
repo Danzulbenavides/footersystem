@@ -11,6 +11,10 @@ function App() {
   const [presets, setPresets] = useState([]);
   const [presetName, setPresetName] = useState("");
 
+  // --- NEW: Loading Screen States ---
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [progressText, setProgressText] = useState("");
+
   // This holds our offline-safe footer image source
   const [footerSource, setFooterSource] = useState(null);
 
@@ -165,15 +169,17 @@ function App() {
       return;
     }
 
+    // TURN ON THE LOADING SCREEN
+    setIsProcessing(true);
+    setProgressText("Initializing system...");
+
     try {
       const watermarkImg = await loadImage(footerSource);
       const zip = new JSZip();
 
-      // SPEED OPTIMIZATION 1: Create ONE canvas and reuse it
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
 
-      // Pre-calculate watermark math to avoid repeating it in the loop
       const scaleFactor = 0.08;
       const wmWidth = TARGET_WIDTH * scaleFactor;
       const wmHeight = (watermarkImg.height / watermarkImg.width) * wmWidth;
@@ -182,10 +188,14 @@ function App() {
       const wmY = TARGET_HEIGHT - wmHeight - padding;
 
       for (let i = 0; i < galleryFiles.length; i++) {
+        // UPDATE THE LIVE PROGRESS TEXT
+        setProgressText(
+          `Processing photo ${i + 1} of ${galleryFiles.length}...`,
+        );
+
         const file = galleryFiles[i];
         const baseImg = await loadImage(file);
 
-        // Reset canvas dimensions for the current image
         canvas.width = TARGET_WIDTH;
         canvas.height = TARGET_HEIGHT;
 
@@ -202,21 +212,18 @@ function App() {
         ctx.drawImage(baseImg, offsetX, offsetY, scaledWidth, scaledHeight);
         ctx.drawImage(watermarkImg, wmX, wmY, wmWidth, wmHeight);
 
-        // SPEED OPTIMIZATION 2: Aggressively drop quality to 0.7 for faster processing
         const blobData = await new Promise((resolve) => {
           canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.7);
         });
 
         zip.file(`watermarked_${file.name}`, blobData);
 
-        // SPEED OPTIMIZATION 3: "Breathe" - Let the browser rest for 10ms so it doesn't freeze
         await new Promise((resolve) => setTimeout(resolve, 10));
-
-        // Clear the canvas to prevent memory build-up
         ctx.clearRect(0, 0, TARGET_WIDTH, TARGET_HEIGHT);
       }
 
-      // SPEED OPTIMIZATION 4: Use "STORE" (0 compression) because JPEGs are already compressed
+      setProgressText("Packaging files into a ZIP... Please wait.");
+
       const zipContent = await zip.generateAsync({
         type: "blob",
         compression: "STORE",
@@ -225,7 +232,6 @@ function App() {
       const zipUrl = URL.createObjectURL(zipContent);
       triggerDownload(zipUrl, "watermarked_photos.zip");
 
-      // Clean up the heavy zip URL from memory
       setTimeout(() => {
         URL.revokeObjectURL(zipUrl);
       }, 5000);
@@ -236,6 +242,10 @@ function App() {
       alert(
         "Something went wrong while processing. Check console for details.",
       );
+    } finally {
+      // TURN OFF THE LOADING SCREEN WHETHER IT SUCCEEDS OR FAILS
+      setIsProcessing(false);
+      setProgressText("");
     }
   };
 
@@ -244,6 +254,56 @@ function App() {
       className="App"
       style={{ padding: "2rem", maxWidth: "800px", margin: "0 auto" }}
     >
+      {/* --- FULL SCREEN LOADING OVERLAY --- */}
+      {isProcessing && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100vw",
+            height: "100vh",
+            backgroundColor: "rgba(0, 0, 0, 0.85)",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            alignItems: "center",
+            zIndex: 9999, // Ensures it sits on top of everything else
+            color: "white",
+            fontFamily: "sans-serif",
+          }}
+        >
+          {/* Simple CSS Spinner */}
+          <div
+            style={{
+              width: "50px",
+              height: "50px",
+              border: "5px solid #f3f3f3",
+              borderTop: "5px solid #007bff",
+              borderRadius: "50%",
+              animation: "spin 1s linear infinite",
+              marginBottom: "1.5rem",
+            }}
+          />
+          <h2 style={{ margin: "0 0 1rem 0", color: "#ffffff" }}>
+            {progressText}
+          </h2>
+          <p style={{ color: "#aaaaaa", margin: 0 }}>
+            Please do not close or refresh this tab.
+          </p>
+
+          {/* Injecting keyframes for the spinner locally */}
+          <style>
+            {`
+              @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+              }
+            `}
+          </style>
+        </div>
+      )}
+
       <h1>Bulk Photo Watermarking System</h1>
       <hr />
 
@@ -337,17 +397,19 @@ function App() {
       <section style={{ marginTop: "3rem", textAlign: "center" }}>
         <button
           onClick={processImages}
-          disabled={galleryFiles.length === 0 || !footerSource}
+          disabled={galleryFiles.length === 0 || !footerSource || isProcessing}
           style={{
             padding: "1rem 2rem",
             fontSize: "1.2rem",
             backgroundColor:
-              galleryFiles.length > 0 && footerSource ? "#28a745" : "#ccc",
+              galleryFiles.length > 0 && footerSource && !isProcessing
+                ? "#28a745"
+                : "#ccc",
             color: "white",
             border: "none",
             borderRadius: "8px",
             cursor:
-              galleryFiles.length > 0 && footerSource
+              galleryFiles.length > 0 && footerSource && !isProcessing
                 ? "pointer"
                 : "not-allowed",
             fontWeight: "bold",
@@ -355,7 +417,9 @@ function App() {
         >
           {!footerSource
             ? "System Initializing..."
-            : `Process & Download ${galleryFiles.length > 0 ? galleryFiles.length : ""} Photos`}
+            : isProcessing
+              ? "Processing..."
+              : `Process & Download ${galleryFiles.length > 0 ? galleryFiles.length : ""} Photos`}
         </button>
       </section>
     </div>
