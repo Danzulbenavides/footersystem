@@ -18,9 +18,9 @@ function App() {
   // This holds our offline-safe footer image source
   const [footerSource, setFooterSource] = useState(null);
 
-  // --- LOCKED DIMENSIONS ---
-  const TARGET_WIDTH = 5955;
-  const TARGET_HEIGHT = 3970;
+  // --- OPTIMIZED DIMENSIONS (For massive speed boost) ---
+  const TARGET_WIDTH = 2048;
+  const TARGET_HEIGHT = 1365;
 
   // Cache the system footer into device memory for offline use
   useEffect(() => {
