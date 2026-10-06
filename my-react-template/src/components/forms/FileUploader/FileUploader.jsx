@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 import styles from "./FileUploader.module.css";
 
+// Maximum number of images allowed in bulk mode.
 const MAX_FILES = 100;
 
 const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
@@ -9,29 +10,59 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
 
   const [selectedFiles, setSelectedFiles] = useState([]);
 
-  const [previewUrls, setPreviewUrls] = useState([]);
+  const [previewItems, setPreviewItems] = useState([]);
+
+  const previewUrlsRef = useRef([]);
 
   const [dragActive, setDragActive] = useState(false);
 
   const [error, setError] = useState(null);
 
   // =====================================================
-  // CREATE PREVIEW URLS ONLY WHEN FILES CHANGE
+  // CLEAN UP PREVIEW URLS
   // =====================================================
 
   useEffect(() => {
-    const urls = selectedFiles.map((file) => URL.createObjectURL(file));
-
-    setPreviewUrls(urls);
-
-    // Release URLs when files change
-    // or component unmounts.
     return () => {
-      urls.forEach((url) => {
+      previewUrlsRef.current.forEach((url) => {
         URL.revokeObjectURL(url);
       });
+
+      previewUrlsRef.current = [];
     };
-  }, [selectedFiles]);
+  }, []);
+
+  // =====================================================
+  // REPLACE CURRENT SELECTION
+  // =====================================================
+
+  const replaceSelectedFiles = (files) => {
+    // Release previous object URLs.
+    previewUrlsRef.current.forEach((url) => {
+      URL.revokeObjectURL(url);
+    });
+
+    previewUrlsRef.current = [];
+
+    // Create new preview URLs once.
+    const items = files.map((file) => {
+      const url = URL.createObjectURL(file);
+
+      previewUrlsRef.current.push(url);
+
+      return {
+        file,
+        url,
+      };
+    });
+
+    setSelectedFiles(files);
+    setPreviewItems(items);
+
+    if (onFilesSelected) {
+      onFilesSelected(files);
+    }
+  };
 
   // =====================================================
   // VALIDATE FILES
@@ -44,32 +75,27 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
       return;
     }
 
-    // Only allow actual image files.
+    // Only allow image files.
     const validImages = files.filter((file) => file.type.startsWith("image/"));
 
     if (validImages.length === 0) {
       setError("Please upload valid image files.");
+
       return;
     }
 
     // ---------------------------------------------------
-    // Single-image mode
+    // SINGLE IMAGE MODE
     // ---------------------------------------------------
 
     if (!allowMultiple) {
-      const selected = [validImages[0]];
-
-      setSelectedFiles(selected);
-
-      if (onFilesSelected) {
-        onFilesSelected(selected);
-      }
+      replaceSelectedFiles([validImages[0]]);
 
       return;
     }
 
     // ---------------------------------------------------
-    // Bulk mode
+    // BULK IMAGE MODE
     // ---------------------------------------------------
 
     const limitedFiles = validImages.slice(0, MAX_FILES);
@@ -78,11 +104,7 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
       setError(`Only the first ${MAX_FILES} images were selected.`);
     }
 
-    setSelectedFiles(limitedFiles);
-
-    if (onFilesSelected) {
-      onFilesSelected(limitedFiles);
-    }
+    replaceSelectedFiles(limitedFiles);
   };
 
   // =====================================================
@@ -94,7 +116,7 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
 
     validateAndSetFiles(files);
 
-    // Allows selecting the same file again later.
+    // Allows the same file to be selected again.
     event.target.value = "";
   };
 
@@ -114,6 +136,10 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
       setDragActive(false);
     }
   };
+
+  // =====================================================
+  // DROP
+  // =====================================================
 
   const handleDrop = (event) => {
     event.preventDefault();
@@ -143,20 +169,28 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
   const handleKeyDown = (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
+
       openFilePicker();
     }
   };
 
   // =====================================================
-  // CLEAR FILES
+  // CLEAR SELECTION
   // =====================================================
 
   const clearFiles = (event) => {
     event.preventDefault();
     event.stopPropagation();
 
+    // Release object URLs.
+    previewUrlsRef.current.forEach((url) => {
+      URL.revokeObjectURL(url);
+    });
+
+    previewUrlsRef.current = [];
+
     setSelectedFiles([]);
-    setPreviewUrls([]);
+    setPreviewItems([]);
     setError(null);
 
     if (hiddenFileInput.current) {
@@ -202,39 +236,49 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
         position: "relative",
       }}
     >
-      {/* ================================================
+      {/* =================================================
           PREVIEWS
-          ================================================ */}
+          ================================================= */}
 
       {selectedFiles.length > 0 ? (
         <div>
           <div
             style={{
               display: "flex",
+
               flexWrap: "wrap",
+
               gap: "10px",
+
               justifyContent: "center",
             }}
           >
-            {previewUrls.map((url, index) => (
+            {previewItems.map((item, index) => (
               <div
-                key={url}
+                key={item.url}
                 style={{
                   width: "80px",
+
                   height: "80px",
+
                   overflow: "hidden",
+
                   borderRadius: "8px",
+
                   position: "relative",
                 }}
               >
                 <img
-                  src={url}
+                  src={item.url}
                   alt={`Preview ${index + 1}`}
                   loading="lazy"
                   style={{
                     width: "100%",
+
                     height: "100%",
+
                     objectFit: "cover",
+
                     display: "block",
                   }}
                 />
@@ -245,6 +289,7 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
           <p
             style={{
               marginTop: "1rem",
+
               marginBottom: "0.5rem",
             }}
           >
@@ -255,7 +300,9 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
           <p
             style={{
               fontSize: "0.8rem",
+
               color: "#64748b",
+
               margin: "0 0 1rem 0",
             }}
           >
@@ -265,12 +312,21 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
           <button
             type="button"
             onClick={clearFiles}
-            onKeyDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              // Prevent the parent
+              // uploader from opening
+              // the file picker.
+              event.stopPropagation();
+            }}
             style={{
               padding: "0.5rem 1rem",
+
               border: "1px solid #cbd5e1",
+
               borderRadius: "6px",
+
               background: "#ffffff",
+
               cursor: "pointer",
             }}
           >
@@ -282,6 +338,7 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
           <p
             style={{
               margin: "0 0 0.5rem 0",
+
               fontWeight: "600",
             }}
           >
@@ -292,6 +349,7 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
           <p
             style={{
               margin: "0",
+
               color: "#64748b",
             }}
           >
@@ -302,7 +360,9 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
             <p
               style={{
                 margin: "0.5rem 0 0 0",
+
                 fontSize: "0.8rem",
+
                 color: "#94a3b8",
               }}
             >
@@ -312,15 +372,17 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
         </div>
       )}
 
-      {/* ================================================
+      {/* =================================================
           ERROR
-          ================================================ */}
+          ================================================= */}
 
       {error && (
         <p
           style={{
             color: "#dc2626",
+
             marginTop: "1rem",
+
             marginBottom: 0,
           }}
         >
@@ -328,9 +390,9 @@ const FileUploader = ({ onFilesSelected, allowMultiple = false }) => {
         </p>
       )}
 
-      {/* ================================================
-          HIDDEN FILE INPUT
-          ================================================ */}
+      {/* =================================================
+          HIDDEN INPUT
+          ================================================= */}
 
       <input
         accept="image/*"

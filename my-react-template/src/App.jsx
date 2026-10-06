@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+
 import { FileUploader } from "./components";
 import JSZip from "jszip";
 import "./App.css";
@@ -11,14 +12,24 @@ import lockedFooter from "./assets/footer-03.png";
 
 const API_BASE_URL = "https://footersystem.onrender.com";
 
-const TARGET_WIDTH = 2048;
-const TARGET_HEIGHT = 1365;
+// Maximum size of the longest side.
+//
+// Example:
+// 6000 × 4000 -> 3000 × 2000
+// 4000 × 6000 -> 2000 × 3000
+//
+// Smaller images are NOT enlarged.
+const MAX_DIMENSION = 3000;
 
-// Good balance between quality and file size.
-const JPEG_QUALITY = 0.85;
+// High-quality JPEG output.
+const JPEG_QUALITY = 0.9;
 
-// Maximum number of images processed at once.
-// Keeping this controlled prevents excessive RAM usage.
+// =====================================================
+// PROCESSING CONCURRENCY
+// =====================================================
+
+// Process a controlled number of images simultaneously.
+// This improves speed without consuming excessive RAM.
 const getConcurrency = () => {
   const cores =
     typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 2 : 2;
@@ -27,33 +38,55 @@ const getConcurrency = () => {
 };
 
 // =====================================================
-// IMAGE HELPERS
+// BROWSER YIELD
+// =====================================================
+
+// Give the browser an opportunity to update the UI
+// between processing batches.
+const yieldToBrowser = () => {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(resolve);
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+};
+
+// =====================================================
+// IMAGE LOADING
 // =====================================================
 
 const loadImage = async (source) => {
-  // Uploaded File/Blob
+  // ---------------------------------------------------
+  // Uploaded File / Blob
+  // ---------------------------------------------------
+
   if (typeof Blob !== "undefined" && source instanceof Blob) {
-    // Fast path for modern browsers
+    // Fast decoding path for modern browsers.
     if (typeof createImageBitmap === "function") {
       try {
         return await createImageBitmap(source);
       } catch (error) {
-        console.warn("createImageBitmap failed. Falling back to Image:", error);
+        console.warn("createImageBitmap failed. Using fallback:", error);
       }
     }
 
-    // Fallback for compatibility
+    // Compatible fallback.
     return new Promise((resolve, reject) => {
       const objectUrl = URL.createObjectURL(source);
+
       const img = new Image();
 
       img.onload = () => {
         URL.revokeObjectURL(objectUrl);
+
         resolve(img);
       };
 
       img.onerror = () => {
         URL.revokeObjectURL(objectUrl);
+
         reject(new Error("Failed to render image asset."));
       };
 
@@ -61,17 +94,28 @@ const loadImage = async (source) => {
     });
   }
 
-  // String / bundled asset
+  // ---------------------------------------------------
+  // Bundled Footer / Normal Image Source
+  // ---------------------------------------------------
+
   return new Promise((resolve, reject) => {
     const img = new Image();
 
-    img.onload = () => resolve(img);
+    img.onload = () => {
+      resolve(img);
+    };
 
-    img.onerror = () => reject(new Error("Failed to render image asset."));
+    img.onerror = () => {
+      reject(new Error("Failed to render image asset."));
+    };
 
     img.src = source;
   });
 };
+
+// =====================================================
+// CANVAS -> BLOB
+// =====================================================
 
 const canvasToBlob = (canvas, type = "image/jpeg", quality = JPEG_QUALITY) => {
   return new Promise((resolve, reject) => {
@@ -93,20 +137,35 @@ const canvasToBlob = (canvas, type = "image/jpeg", quality = JPEG_QUALITY) => {
 // PROCESS ONE IMAGE
 // =====================================================
 
-const processSingleImage = async (
-  file,
-  watermarkImg,
-  watermarkWidth,
-  watermarkHeight,
-  watermarkX,
-  watermarkY,
-) => {
+const processSingleImage = async (file, watermarkImg) => {
   const baseImg = await loadImage(file);
+
+  // ---------------------------------------------------
+  // CALCULATE OUTPUT SIZE
+  //
+  // The longest side is limited to 3000px.
+  // Aspect ratio is preserved.
+  // Smaller images remain unchanged.
+  // ---------------------------------------------------
+
+  const longestSide = Math.max(baseImg.width, baseImg.height);
+
+  const resizeScale =
+    longestSide > MAX_DIMENSION ? MAX_DIMENSION / longestSide : 1;
+
+  const outputWidth = Math.max(1, Math.round(baseImg.width * resizeScale));
+
+  const outputHeight = Math.max(1, Math.round(baseImg.height * resizeScale));
+
+  // ---------------------------------------------------
+  // CREATE CANVAS
+  // ---------------------------------------------------
 
   const canvas = document.createElement("canvas");
 
-  canvas.width = TARGET_WIDTH;
-  canvas.height = TARGET_HEIGHT;
+  canvas.width = outputWidth;
+
+  canvas.height = outputHeight;
 
   const ctx = canvas.getContext("2d", {
     alpha: false,
@@ -121,39 +180,40 @@ const processSingleImage = async (
     throw new Error("Canvas rendering is not supported.");
   }
 
-  // ===================================================
-  // IMAGE QUALITY SETTINGS
-  // ===================================================
+  // ---------------------------------------------------
+  // HIGH-QUALITY IMAGE SCALING
+  // ---------------------------------------------------
 
   ctx.imageSmoothingEnabled = true;
+
   ctx.imageSmoothingQuality = "high";
 
-  // ===================================================
-  // CALCULATE COVER SCALE
-  // ===================================================
+  // ---------------------------------------------------
+  // WATERMARK SIZE
+  //
+  // Approximately 8% of final image width.
+  // ---------------------------------------------------
 
-  const scale = Math.max(
-    TARGET_WIDTH / baseImg.width,
-    TARGET_HEIGHT / baseImg.height,
-  );
+  const watermarkWidth = outputWidth * 0.08;
 
-  const scaledWidth = baseImg.width * scale;
+  const watermarkHeight =
+    (watermarkImg.height / watermarkImg.width) * watermarkWidth;
 
-  const scaledHeight = baseImg.height * scale;
+  const padding = outputWidth * 0.02;
 
-  const offsetX = (TARGET_WIDTH - scaledWidth) / 2;
+  const watermarkX = padding;
 
-  const offsetY = (TARGET_HEIGHT - scaledHeight) / 2;
+  const watermarkY = outputHeight - watermarkHeight - padding;
 
-  // ===================================================
+  // ---------------------------------------------------
   // DRAW BASE IMAGE
-  // ===================================================
+  // ---------------------------------------------------
 
-  ctx.drawImage(baseImg, offsetX, offsetY, scaledWidth, scaledHeight);
+  ctx.drawImage(baseImg, 0, 0, outputWidth, outputHeight);
 
-  // ===================================================
+  // ---------------------------------------------------
   // DRAW WATERMARK
-  // ===================================================
+  // ---------------------------------------------------
 
   ctx.drawImage(
     watermarkImg,
@@ -163,13 +223,16 @@ const processSingleImage = async (
     watermarkHeight,
   );
 
-  // ===================================================
+  // ---------------------------------------------------
   // EXPORT JPEG
-  // ===================================================
+  // ---------------------------------------------------
 
   const blob = await canvasToBlob(canvas, "image/jpeg", JPEG_QUALITY);
 
-  // Release ImageBitmap memory when possible.
+  // ---------------------------------------------------
+  // RELEASE IMAGE MEMORY
+  // ---------------------------------------------------
+
   if (typeof baseImg.close === "function") {
     baseImg.close();
   }
@@ -178,7 +241,7 @@ const processSingleImage = async (
 };
 
 // =====================================================
-// MAIN APPLICATION
+// APPLICATION
 // =====================================================
 
 function App() {
@@ -196,8 +259,12 @@ function App() {
 
   const [isSavingPreset, setIsSavingPreset] = useState(false);
 
+  const [processedImages, setProcessedImages] = useState([]);
+
+  const [isSavingPhotos, setIsSavingPhotos] = useState(false);
+
   // ===================================================
-  // LOAD PRESETS
+  // FETCH PRESETS FROM SERVER
   // ===================================================
 
   const fetchPresets = useCallback(async () => {
@@ -220,12 +287,15 @@ function App() {
 
       setPresets(data);
 
-      // Keep a local copy for fast startup/offline use.
+      // Save latest cloud presets locally.
       localStorage.setItem("offline_presets", JSON.stringify(data));
     } catch (error) {
       console.warn("Could not fetch cloud presets:", error);
 
-      // Fall back to cached presets.
+      // -------------------------------------------------
+      // OFFLINE FALLBACK
+      // -------------------------------------------------
+
       try {
         const saved = localStorage.getItem("offline_presets");
 
@@ -243,11 +313,12 @@ function App() {
   }, []);
 
   // ===================================================
-  // INITIALIZE
+  // INITIAL LOAD
   // ===================================================
 
   useEffect(() => {
-    // Load local data immediately.
+    // Load cached presets immediately.
+    // This makes startup faster and supports offline use.
     try {
       const saved = localStorage.getItem("offline_presets");
 
@@ -262,7 +333,7 @@ function App() {
       console.warn("Could not read cached presets:", error);
     }
 
-    // Refresh from the cloud in the background.
+    // Refresh from the server in the background.
     fetchPresets();
   }, [fetchPresets]);
 
@@ -275,6 +346,7 @@ function App() {
 
     if (!trimmedName) {
       alert("Please enter a preset name!");
+
       return;
     }
 
@@ -282,25 +354,39 @@ function App() {
 
     const localPresetObj = {
       id: `local-${Date.now()}`,
+
       user_id: 1,
+
       preset_name: trimmedName,
-      aspect_ratio: `${TARGET_WIDTH}x${TARGET_HEIGHT}`,
+
+      // The preset now represents the
+      // automatic 3000px maximum behavior.
+      aspect_ratio: `AUTO (max ${MAX_DIMENSION}px)`,
+
       watermark_position: "bottom-left",
+
       watermark_scale: 100,
     };
 
     try {
       const response = await fetch(`${API_BASE_URL}/presets`, {
         method: "POST",
+
         headers: {
           "Content-Type": "application/json",
+
           Accept: "application/json",
         },
+
         body: JSON.stringify({
           user_id: 1,
+
           preset_name: trimmedName,
-          aspect_ratio: `${TARGET_WIDTH}x${TARGET_HEIGHT}`,
+
+          aspect_ratio: `AUTO (max ${MAX_DIMENSION}px)`,
+
           watermark_position: "bottom-left",
+
           watermark_scale: 100,
         }),
       });
@@ -311,10 +397,14 @@ function App() {
         throw new Error(data?.error || `Server returned ${response.status}`);
       }
 
-      // Use server-created record.
+      // -------------------------------------------------
+      // UPDATE UI + CACHE
+      // -------------------------------------------------
+
       setPresets((current) => {
         const updated = [
           data,
+
           ...current.filter((preset) => preset.id !== data.id),
         ];
 
@@ -329,7 +419,10 @@ function App() {
     } catch (error) {
       console.warn("Cloud save failed. Saving locally:", error);
 
-      // Offline fallback.
+      // -------------------------------------------------
+      // OFFLINE SAVE
+      // -------------------------------------------------
+
       setPresets((current) => {
         const updated = [localPresetObj, ...current];
 
@@ -353,6 +446,7 @@ function App() {
   const processImages = async () => {
     if (galleryFiles.length === 0) {
       alert("Please upload gallery photos first!");
+
       return;
     }
 
@@ -361,64 +455,41 @@ function App() {
     }
 
     setIsProcessing(true);
+
+    setProcessedImages([]);
+
     setProgressText("Preparing watermark...");
+
     setProgressPercent(0);
 
     try {
-      // =================================================
-      // LOAD WATERMARK
-      // =================================================
+      // -------------------------------------------------
+      // LOAD FOOTER
+      // -------------------------------------------------
 
       const watermarkImg = await loadImage(lockedFooter);
 
-      // =================================================
-      // CREATE ZIP
-      // =================================================
-
-      const zip = new JSZip();
-
-      // =================================================
-      // WATERMARK SIZE
-      // =================================================
-
-      const scaleFactor = 0.08;
-
-      const watermarkWidth = TARGET_WIDTH * scaleFactor;
-
-      const watermarkHeight =
-        (watermarkImg.height / watermarkImg.width) * watermarkWidth;
-
-      const padding = TARGET_WIDTH * 0.02;
-
-      const watermarkX = padding;
-
-      const watermarkY = TARGET_HEIGHT - watermarkHeight - padding;
-
-      // =================================================
+      // -------------------------------------------------
       // CONTROLLED CONCURRENCY
-      // =================================================
+      // -------------------------------------------------
 
       const concurrency = getConcurrency();
 
       let completed = 0;
 
-      // =================================================
-      // PROCESS IN BATCHES
-      // =================================================
+      const processed = [];
+
+      // -------------------------------------------------
+      // PROCESS BATCHES
+      // -------------------------------------------------
 
       for (let start = 0; start < galleryFiles.length; start += concurrency) {
         const batch = galleryFiles.slice(start, start + concurrency);
 
+        // Process 2–3 images simultaneously.
         const results = await Promise.all(
           batch.map(async (file) => {
-            const blob = await processSingleImage(
-              file,
-              watermarkImg,
-              watermarkWidth,
-              watermarkHeight,
-              watermarkX,
-              watermarkY,
-            );
+            const blob = await processSingleImage(file, watermarkImg);
 
             completed += 1;
 
@@ -430,55 +501,255 @@ function App() {
               `Processing photo ${completed} of ${galleryFiles.length}...`,
             );
 
+            const baseName = file.name.replace(/\.[^/.]+$/, "");
+
             return {
-              file,
+              name: `watermarked_${baseName}.jpg`,
+
               blob,
+
+              originalName: file.name,
             };
           }),
         );
 
-        // =================================================
-        // ADD RESULTS TO ZIP
-        // =================================================
+        processed.push(...results);
 
-        for (const { file, blob } of results) {
-          const baseName = file.name.replace(/\.[^/.]+$/, "");
-
-          zip.file(`watermarked_${baseName}.jpg`, blob);
-        }
-
-        // =================================================
-        // GIVE BROWSER A CHANCE TO UPDATE UI
-        // =================================================
-
-        await new Promise((resolve) => requestAnimationFrame(resolve));
+        // Allow UI to update.
+        await yieldToBrowser();
       }
 
-      // =================================================
-      // GENERATE ZIP
-      // =================================================
+      // -------------------------------------------------
+      // STORE PROCESSED IMAGES
+      // -------------------------------------------------
 
-      setProgressText("Packaging images into ZIP...");
+      setProcessedImages(processed);
+
       setProgressPercent(100);
 
-      const zipContent = await zip.generateAsync(
-        {
-          type: "blob",
+      setProgressText("Photos are ready to save!");
 
-          // JPEG files are already compressed,
-          // so STORE avoids unnecessary ZIP CPU work.
-          compression: "STORE",
-        },
-        (metadata) => {
-          if (typeof metadata.percent === "number") {
-            setProgressText(`Creating ZIP... ${Math.round(metadata.percent)}%`);
-          }
+      // Release watermark bitmap.
+      if (typeof watermarkImg.close === "function") {
+        watermarkImg.close();
+      }
+
+      alert(
+        `${processed.length} photo${
+          processed.length === 1 ? "" : "s"
+        } processed successfully!`,
+      );
+    } catch (error) {
+      console.error("Image processing error:", error);
+
+      alert(
+        "Something went wrong while processing the images. Please check the browser console.",
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // ===================================================
+  // CHECK NATIVE PHOTO SHARING SUPPORT
+  // ===================================================
+
+  const canShareImages = () => {
+    if (typeof navigator === "undefined") {
+      return false;
+    }
+
+    if (
+      typeof navigator.share !== "function" ||
+      typeof navigator.canShare !== "function"
+    ) {
+      return false;
+    }
+
+    if (processedImages.length === 0) {
+      return false;
+    }
+
+    try {
+      const testFile = new File(
+        [processedImages[0].blob],
+
+        processedImages[0].name,
+
+        {
+          type: "image/jpeg",
         },
       );
 
-      // =================================================
-      // DOWNLOAD ZIP
-      // =================================================
+      return navigator.canShare({
+        files: [testFile],
+      });
+    } catch {
+      return false;
+    }
+  };
+
+  // ===================================================
+  // SAVE PHOTOS USING DEVICE SHARE
+  // ===================================================
+
+  const handleSavePhotos = async () => {
+    if (processedImages.length === 0) {
+      alert("Please process your photos first.");
+
+      return;
+    }
+
+    if (!canShareImages()) {
+      alert(
+        "This browser does not support native photo sharing. Please use Save to Folder or Download ZIP.",
+      );
+
+      return;
+    }
+
+    setIsSavingPhotos(true);
+
+    try {
+      const files = processedImages.map(
+        ({ blob, name }) =>
+          new File([blob], name, {
+            type: "image/jpeg",
+
+            lastModified: Date.now(),
+          }),
+      );
+
+      await navigator.share({
+        files,
+
+        title: "Watermarked Photos",
+
+        text: "Watermarked photos created with FooterSystem.",
+      });
+    } catch (error) {
+      // User closing the share menu is normal.
+      if (error?.name !== "AbortError") {
+        console.error("Photo sharing failed:", error);
+
+        alert(
+          "The device could not share these photos. Please use another save option.",
+        );
+      }
+    } finally {
+      setIsSavingPhotos(false);
+    }
+  };
+
+  // ===================================================
+  // CHECK FOLDER SAVE SUPPORT
+  // ===================================================
+
+  const canSaveToFolder =
+    typeof window !== "undefined" && "showDirectoryPicker" in window;
+
+  // ===================================================
+  // SAVE DIRECTLY TO SELECTED FOLDER
+  // ===================================================
+
+  const handleSaveToFolder = async () => {
+    if (processedImages.length === 0) {
+      alert("Please process your photos first.");
+
+      return;
+    }
+
+    if (!canSaveToFolder) {
+      alert(
+        "Your browser does not support direct folder saving. Please use Download ZIP instead.",
+      );
+
+      return;
+    }
+
+    setIsSavingPhotos(true);
+
+    try {
+      // Ask the user to select a folder.
+      const directoryHandle = await window.showDirectoryPicker({
+        mode: "readwrite",
+      });
+
+      // Save each image individually.
+      for (const { blob, name } of processedImages) {
+        const fileHandle = await directoryHandle.getFileHandle(name, {
+          create: true,
+        });
+
+        const writable = await fileHandle.createWritable();
+
+        await writable.write(blob);
+
+        await writable.close();
+      }
+
+      alert(
+        `${processedImages.length} photo${
+          processedImages.length === 1 ? "" : "s"
+        } saved successfully!`,
+      );
+    } catch (error) {
+      // User cancelled the folder picker.
+      if (error?.name === "AbortError") {
+        return;
+      }
+
+      console.error("Folder save failed:", error);
+
+      alert("Could not save the photos to the selected folder.");
+    } finally {
+      setIsSavingPhotos(false);
+    }
+  };
+
+  // ===================================================
+  // DOWNLOAD ZIP
+  // ===================================================
+
+  const handleDownloadZip = async () => {
+    if (processedImages.length === 0) {
+      alert("Please process your photos first.");
+
+      return;
+    }
+
+    setIsSavingPhotos(true);
+
+    setProgressText("Creating ZIP...");
+
+    setProgressPercent(0);
+
+    try {
+      const zip = new JSZip();
+
+      // Add processed JPEG files.
+      for (const { blob, name } of processedImages) {
+        zip.file(name, blob);
+      }
+
+      // JPEG files are already compressed,
+      // so STORE avoids unnecessary CPU work.
+      const zipContent = await zip.generateAsync(
+        {
+          type: "blob",
+          compression: "STORE",
+        },
+
+        (metadata) => {
+          if (typeof metadata.percent === "number") {
+            const percent = Math.round(metadata.percent);
+
+            setProgressPercent(percent);
+
+            setProgressText(`Creating ZIP... ${percent}%`);
+          }
+        },
+      );
 
       const zipUrl = URL.createObjectURL(zipContent);
 
@@ -494,33 +765,22 @@ function App() {
 
       link.remove();
 
-      // =================================================
-      // CLEANUP
-      // =================================================
-
+      // Release memory.
       setTimeout(() => {
         URL.revokeObjectURL(zipUrl);
       }, 1000);
 
-      if (typeof watermarkImg.close === "function") {
-        watermarkImg.close();
-      }
-
-      alert(
-        `${galleryFiles.length} photo${
-          galleryFiles.length === 1 ? "" : "s"
-        } processed successfully!`,
-      );
-    } catch (error) {
-      console.error("Image processing error:", error);
-
-      alert(
-        "Something went wrong while processing the images. Please check the browser console.",
-      );
-    } finally {
-      setIsProcessing(false);
       setProgressText("");
+
       setProgressPercent(0);
+
+      alert("ZIP downloaded successfully!");
+    } catch (error) {
+      console.error("ZIP creation failed:", error);
+
+      alert("Could not create the ZIP file.");
+    } finally {
+      setIsSavingPhotos(false);
     }
   };
 
@@ -537,26 +797,37 @@ function App() {
         margin: "0 auto",
       }}
     >
-      {/* ================================================
+      {/* =================================================
           PROCESSING OVERLAY
-          ================================================ */}
+          ================================================= */}
 
       {isProcessing && (
         <div
           style={{
             position: "fixed",
             inset: 0,
+
             width: "100vw",
             height: "100vh",
+
             background: "rgba(0, 0, 0, 0.88)",
+
             display: "flex",
+
             flexDirection: "column",
+
             justifyContent: "center",
+
             alignItems: "center",
+
             zIndex: 9999,
+
             color: "white",
+
             fontFamily: "sans-serif",
+
             padding: "2rem",
+
             boxSizing: "border-box",
           }}
         >
@@ -566,43 +837,56 @@ function App() {
             style={{
               width: "50px",
               height: "50px",
+
               border: "5px solid rgba(255,255,255,0.25)",
+
               borderTop: "5px solid #ffffff",
+
               borderRadius: "50%",
+
               animation: "spin 1s linear infinite",
+
               marginBottom: "1.5rem",
             }}
           />
 
-          {/* Progress text */}
-
           <h2
             style={{
               margin: "0 0 1rem 0",
+
               color: "#ffffff",
+
               textAlign: "center",
             }}
           >
             {progressText}
           </h2>
 
-          {/* Progress percentage */}
+          {/* Progress Bar */}
 
           <div
             style={{
               width: "min(500px, 90vw)",
+
               height: "10px",
+
               background: "rgba(255,255,255,0.2)",
+
               borderRadius: "999px",
+
               overflow: "hidden",
+
               marginBottom: "0.75rem",
             }}
           >
             <div
               style={{
                 width: `${progressPercent}%`,
+
                 height: "100%",
+
                 background: "#ffffff",
+
                 transition: "width 0.2s ease",
               }}
             />
@@ -611,6 +895,7 @@ function App() {
           <p
             style={{
               color: "rgba(255,255,255,0.7)",
+
               margin: 0,
             }}
           >
@@ -620,7 +905,9 @@ function App() {
           <p
             style={{
               color: "rgba(255,255,255,0.6)",
+
               marginTop: "1rem",
+
               textAlign: "center",
             }}
           >
@@ -643,23 +930,26 @@ function App() {
         </div>
       )}
 
-      {/* ================================================
+      {/* =================================================
           TITLE
-          ================================================ */}
+          ================================================= */}
 
       <h1>Bulk Photo Watermarking System</h1>
 
       <hr />
 
-      {/* ================================================
-          SECTION 1: PRESETS
-          ================================================ */}
+      {/* =================================================
+          SECTION 1: SETTINGS
+          ================================================= */}
 
       <section
         style={{
           marginBottom: "2rem",
+
           padding: "1rem",
+
           backgroundColor: "#f9fafb",
+
           borderRadius: "8px",
         }}
       >
@@ -668,8 +958,11 @@ function App() {
         <div
           style={{
             display: "flex",
+
             gap: "1rem",
+
             alignItems: "flex-end",
+
             marginBottom: "1rem",
           }}
         >
@@ -682,6 +975,7 @@ function App() {
               htmlFor="preset-name"
               style={{
                 display: "block",
+
                 marginBottom: "0.5rem",
               }}
             >
@@ -698,12 +992,14 @@ function App() {
                   handleSavePreset();
                 }
               }}
-              placeholder="e.g., My Facebook Settings"
+              placeholder="e.g., Facebook Photos"
               maxLength={100}
               disabled={isSavingPreset || isProcessing}
               style={{
                 width: "100%",
+
                 padding: "0.5rem",
+
                 boxSizing: "border-box",
               }}
             />
@@ -715,23 +1011,60 @@ function App() {
             disabled={isSavingPreset || isProcessing || !presetName.trim()}
             style={{
               padding: "0.6rem 1.2rem",
+
               backgroundColor:
                 !isSavingPreset && !isProcessing && presetName.trim()
                   ? "#007bff"
                   : "#cccccc",
+
               color: "white",
+
               border: "none",
+
               borderRadius: "4px",
+
               cursor:
                 !isSavingPreset && !isProcessing && presetName.trim()
                   ? "pointer"
                   : "not-allowed",
+
               height: "40px",
             }}
           >
             {isSavingPreset ? "Saving..." : "Save Preset"}
           </button>
         </div>
+
+        {/* Output Information */}
+
+        <div
+          style={{
+            marginBottom: "1rem",
+
+            padding: "0.75rem",
+
+            background: "#ffffff",
+
+            border: "1px solid #e5e7eb",
+
+            borderRadius: "6px",
+
+            fontSize: "0.9rem",
+          }}
+        >
+          <strong>Output settings:</strong>
+          <br />
+          Maximum {MAX_DIMENSION}px on the longest side.
+          <br />
+          JPEG quality: {Math.round(JPEG_QUALITY * 100)}
+          %.
+          <br />
+          Original aspect ratio preserved.
+          <br />
+          Smaller images are not enlarged.
+        </div>
+
+        {/* Presets */}
 
         <div>
           <h3>Available Presets</h3>
@@ -748,8 +1081,10 @@ function App() {
                   }}
                 >
                   <strong>{preset.preset_name}</strong>:{" "}
-                  {preset.watermark_position || "bottom-left"} (
-                  {preset.aspect_ratio})
+                  {preset.watermark_position || "bottom-left"}
+                  {" ("}
+                  {preset.aspect_ratio || `AUTO (max ${MAX_DIMENSION}px)`}
+                  {")"}
                 </li>
               ))}
             </ul>
@@ -757,9 +1092,9 @@ function App() {
         </div>
       </section>
 
-      {/* ================================================
+      {/* =================================================
           SECTION 2: UPLOAD
-          ================================================ */}
+          ================================================= */}
 
       <section>
         <h2>2. Upload Assets</h2>
@@ -773,59 +1108,220 @@ function App() {
 
           <FileUploader
             allowMultiple={true}
-            onFilesSelected={(files) => setGalleryFiles(files)}
+            onFilesSelected={(files) => {
+              setGalleryFiles(files);
+
+              // New selection means
+              // previous results are no longer current.
+              setProcessedImages([]);
+            }}
           />
 
           {galleryFiles.length > 0 && (
             <p
               style={{
                 fontSize: "0.8rem",
+
                 color: "green",
               }}
             >
               Ready to process {galleryFiles.length} photo
-              {galleryFiles.length === 1 ? "" : "s"} with the system footer
+              {galleryFiles.length === 1 ? "" : "s"} with system footer
               template.
             </p>
           )}
         </div>
       </section>
 
-      {/* ================================================
+      {/* =================================================
           SECTION 3: PROCESS
-          ================================================ */}
+          ================================================= */}
 
       <section
         style={{
           marginTop: "3rem",
+
           textAlign: "center",
         }}
       >
+        {/* Process Button */}
+
         <button
           type="button"
           onClick={processImages}
           disabled={galleryFiles.length === 0 || isProcessing}
           style={{
             padding: "1rem 2rem",
+
             fontSize: "1.2rem",
+
             backgroundColor:
               galleryFiles.length > 0 && !isProcessing ? "#28a745" : "#cccccc",
+
             color: "white",
+
             border: "none",
+
             borderRadius: "8px",
+
             cursor:
               galleryFiles.length > 0 && !isProcessing
                 ? "pointer"
                 : "not-allowed",
+
             fontWeight: "bold",
           }}
         >
           {isProcessing
             ? "Processing..."
-            : `Process & Download ${
+            : `Process ${
                 galleryFiles.length > 0 ? galleryFiles.length : ""
               } Photos`}
         </button>
+
+        {/* =================================================
+            SAVE OPTIONS
+            ================================================= */}
+
+        {processedImages.length > 0 && (
+          <div
+            style={{
+              marginTop: "1.5rem",
+
+              display: "flex",
+
+              flexWrap: "wrap",
+
+              gap: "0.75rem",
+
+              justifyContent: "center",
+            }}
+          >
+            {/* -------------------------------------------
+                MOBILE / NATIVE SHARE
+                ------------------------------------------- */}
+
+            {canShareImages() && (
+              <button
+                type="button"
+                onClick={handleSavePhotos}
+                disabled={isSavingPhotos}
+                style={{
+                  padding: "0.8rem 1.2rem",
+
+                  backgroundColor: "#007bff",
+
+                  color: "white",
+
+                  border: "none",
+
+                  borderRadius: "8px",
+
+                  cursor: isSavingPhotos ? "not-allowed" : "pointer",
+
+                  fontWeight: "600",
+
+                  opacity: isSavingPhotos ? 0.7 : 1,
+                }}
+              >
+                {isSavingPhotos ? "Saving..." : "📱 Save Photos"}
+              </button>
+            )}
+
+            {/* -------------------------------------------
+                DESKTOP / FOLDER SAVE
+                ------------------------------------------- */}
+
+            {canSaveToFolder && (
+              <button
+                type="button"
+                onClick={handleSaveToFolder}
+                disabled={isSavingPhotos}
+                style={{
+                  padding: "0.8rem 1.2rem",
+
+                  backgroundColor: "#6f42c1",
+
+                  color: "white",
+
+                  border: "none",
+
+                  borderRadius: "8px",
+
+                  cursor: isSavingPhotos ? "not-allowed" : "pointer",
+
+                  fontWeight: "600",
+
+                  opacity: isSavingPhotos ? 0.7 : 1,
+                }}
+              >
+                📁 Save to Folder
+              </button>
+            )}
+
+            {/* -------------------------------------------
+                UNIVERSAL ZIP FALLBACK
+                ------------------------------------------- */}
+
+            <button
+              type="button"
+              onClick={handleDownloadZip}
+              disabled={isSavingPhotos}
+              style={{
+                padding: "0.8rem 1.2rem",
+
+                backgroundColor: "#444444",
+
+                color: "white",
+
+                border: "none",
+
+                borderRadius: "8px",
+
+                cursor: isSavingPhotos ? "not-allowed" : "pointer",
+
+                fontWeight: "600",
+
+                opacity: isSavingPhotos ? 0.7 : 1,
+              }}
+            >
+              📦 Download ZIP
+            </button>
+          </div>
+        )}
+
+        {/* =================================================
+            OUTPUT DESCRIPTION
+            ================================================= */}
+
+        <p
+          style={{
+            marginTop: "0.75rem",
+
+            fontSize: "0.8rem",
+
+            color: "#64748b",
+          }}
+        >
+          Maximum {MAX_DIMENSION}px on the longest side · JPEG{" "}
+          {Math.round(JPEG_QUALITY * 100)}% · aspect ratio preserved · no
+          upscaling
+        </p>
+
+        {processedImages.length > 0 && (
+          <p
+            style={{
+              marginTop: "0.5rem",
+
+              fontSize: "0.85rem",
+
+              color: "#334155",
+            }}
+          >
+            {processedImages.length} processed photo
+            {processedImages.length === 1 ? "" : "s"} ready to save.
+          </p>
+        )}
       </section>
     </div>
   );
