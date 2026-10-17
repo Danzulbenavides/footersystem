@@ -12,30 +12,20 @@ import lockedFooter from "./assets/footer-03.png";
 
 const API_BASE_URL = "https://footersystem.onrender.com";
 
-// Maximum size of the longest side.
-//
-// Example:
-// 6000 × 4000 -> 3000 × 2000
-// 4000 × 6000 -> 2000 × 3000
-//
-// Smaller images are NOT enlarged.
-const MAX_DIMENSION = 3000;
-
-// High-quality JPEG output.
-const JPEG_QUALITY = 0.9;
+// Keep each photo at its original decoded pixel dimensions.
+// No resizing, downscaling, or upscaling is performed.
+// PNG export is lossless, so processing does not add JPEG compression artifacts.
+const OUTPUT_MIME_TYPE = "image/png";
+const OUTPUT_EXTENSION = "png";
+const OUTPUT_FORMAT_LABEL = "PNG (lossless)";
 
 // =====================================================
 // PROCESSING CONCURRENCY
 // =====================================================
 
-// Process a controlled number of images simultaneously.
-// This improves speed without consuming excessive RAM.
-const getConcurrency = () => {
-  const cores =
-    typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 2 : 2;
-
-  return Math.min(3, Math.max(1, cores - 1));
-};
+// Full-resolution images can use substantial memory.
+// Process one photo at a time to reduce the risk of exhausting browser RAM.
+const getConcurrency = () => 1;
 
 // =====================================================
 // BROWSER YIELD
@@ -117,19 +107,15 @@ const loadImage = async (source) => {
 // CANVAS -> BLOB
 // =====================================================
 
-const canvasToBlob = (canvas, type = "image/jpeg", quality = JPEG_QUALITY) => {
+const canvasToBlob = (canvas, type = OUTPUT_MIME_TYPE) => {
   return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (blob) {
-          resolve(blob);
-        } else {
-          reject(new Error("Failed to encode processed image."));
-        }
-      },
-      type,
-      quality,
-    );
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+      } else {
+        reject(new Error("Failed to encode processed image."));
+      }
+    }, type);
   });
 };
 
@@ -141,21 +127,15 @@ const processSingleImage = async (file, watermarkImg) => {
   const baseImg = await loadImage(file);
 
   // ---------------------------------------------------
-  // CALCULATE OUTPUT SIZE
+  // KEEP ORIGINAL PIXEL DIMENSIONS
   //
-  // The longest side is limited to 3000px.
-  // Aspect ratio is preserved.
-  // Smaller images remain unchanged.
+  // Use the decoded source dimensions directly. The photo
+  // is not resized before the footer is applied.
   // ---------------------------------------------------
 
-  const longestSide = Math.max(baseImg.width, baseImg.height);
+  const outputWidth = baseImg.width;
 
-  const resizeScale =
-    longestSide > MAX_DIMENSION ? MAX_DIMENSION / longestSide : 1;
-
-  const outputWidth = Math.max(1, Math.round(baseImg.width * resizeScale));
-
-  const outputHeight = Math.max(1, Math.round(baseImg.height * resizeScale));
+  const outputHeight = baseImg.height;
 
   // ---------------------------------------------------
   // CREATE CANVAS
@@ -224,10 +204,10 @@ const processSingleImage = async (file, watermarkImg) => {
   );
 
   // ---------------------------------------------------
-  // EXPORT JPEG
+  // EXPORT LOSSLESS PNG
   // ---------------------------------------------------
 
-  const blob = await canvasToBlob(canvas, "image/jpeg", JPEG_QUALITY);
+  const blob = await canvasToBlob(canvas, OUTPUT_MIME_TYPE);
 
   // ---------------------------------------------------
   // RELEASE IMAGE MEMORY
@@ -359,9 +339,8 @@ function App() {
 
       preset_name: trimmedName,
 
-      // The preset now represents the
-      // automatic 3000px maximum behavior.
-      aspect_ratio: `AUTO (max ${MAX_DIMENSION}px)`,
+      // The preset represents full-resolution output.
+      aspect_ratio: "ORIGINAL SIZE (no resizing)",
 
       watermark_position: "bottom-left",
 
@@ -383,7 +362,7 @@ function App() {
 
           preset_name: trimmedName,
 
-          aspect_ratio: `AUTO (max ${MAX_DIMENSION}px)`,
+          aspect_ratio: "ORIGINAL SIZE (no resizing)",
 
           watermark_position: "bottom-left",
 
@@ -504,7 +483,7 @@ function App() {
             const baseName = file.name.replace(/\.[^/.]+$/, "");
 
             return {
-              name: `watermarked_${baseName}.jpg`,
+              name: `watermarked_${baseName}.${OUTPUT_EXTENSION}`,
 
               blob,
 
@@ -577,7 +556,7 @@ function App() {
         processedImages[0].name,
 
         {
-          type: "image/jpeg",
+          type: OUTPUT_MIME_TYPE,
         },
       );
 
@@ -614,7 +593,7 @@ function App() {
       const files = processedImages.map(
         ({ blob, name }) =>
           new File([blob], name, {
-            type: "image/jpeg",
+            type: OUTPUT_MIME_TYPE,
 
             lastModified: Date.now(),
           }),
@@ -727,13 +706,13 @@ function App() {
     try {
       const zip = new JSZip();
 
-      // Add processed JPEG files.
+      // Add processed PNG files.
       for (const { blob, name } of processedImages) {
         zip.file(name, blob);
       }
 
-      // JPEG files are already compressed,
-      // so STORE avoids unnecessary CPU work.
+      // PNG data is already compressed, so STORE
+      // avoids unnecessary recompression work.
       const zipContent = await zip.generateAsync(
         {
           type: "blob",
@@ -1054,14 +1033,13 @@ function App() {
         >
           <strong>Output settings:</strong>
           <br />
-          Maximum {MAX_DIMENSION}px on the longest side.
+          Format: {OUTPUT_FORMAT_LABEL}.
           <br />
-          JPEG quality: {Math.round(JPEG_QUALITY * 100)}
-          %.
+          Original photo dimensions retained.
           <br />
-          Original aspect ratio preserved.
+          No resizing or upscaling.
           <br />
-          Smaller images are not enlarged.
+          Larger output files are expected.
         </div>
 
         {/* Presets */}
@@ -1083,7 +1061,7 @@ function App() {
                   <strong>{preset.preset_name}</strong>:{" "}
                   {preset.watermark_position || "bottom-left"}
                   {" ("}
-                  {preset.aspect_ratio || `AUTO (max ${MAX_DIMENSION}px)`}
+                  {preset.aspect_ratio || "ORIGINAL SIZE (no resizing)"}
                   {")"}
                 </li>
               ))}
@@ -1303,9 +1281,8 @@ function App() {
             color: "#64748b",
           }}
         >
-          Maximum {MAX_DIMENSION}px on the longest side · JPEG{" "}
-          {Math.round(JPEG_QUALITY * 100)}% · aspect ratio preserved · no
-          upscaling
+          {OUTPUT_FORMAT_LABEL} · original pixel dimensions retained · no
+          resizing · larger files expected
         </p>
 
         {processedImages.length > 0 && (
