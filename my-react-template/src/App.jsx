@@ -15,9 +15,9 @@ const API_BASE_URL = "https://footersystem.onrender.com";
 // Keep each photo at its original decoded pixel dimensions.
 // No resizing, downscaling, or upscaling is performed.
 // PNG export is lossless, so processing does not add JPEG compression artifacts.
-const OUTPUT_MIME_TYPE = "image/png";
-const OUTPUT_EXTENSION = "png";
-const OUTPUT_FORMAT_LABEL = "PNG (lossless)";
+const OUTPUT_MIME_TYPE = "image/jpeg";
+const OUTPUT_EXTENSION = "jpg";
+const OUTPUT_FORMAT_LABEL = "JPEG (high quality)";
 
 // =====================================================
 // PROCESSING CONCURRENCY
@@ -107,18 +107,21 @@ const loadImage = async (source) => {
 // CANVAS -> BLOB
 // =====================================================
 
-const canvasToBlob = (canvas, type = OUTPUT_MIME_TYPE) => {
+const canvasToBlob = (canvas, type = OUTPUT_MIME_TYPE, quality = 0.92) => {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) {
-        resolve(blob);
-      } else {
-        reject(new Error("Failed to encode processed image."));
-      }
-    }, type);
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("Failed to encode processed image."));
+        }
+      },
+      type,
+      quality,
+    );
   });
 };
-
 // =====================================================
 // PROCESS ONE IMAGE
 // =====================================================
